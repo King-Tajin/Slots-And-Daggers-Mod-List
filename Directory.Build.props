@@ -1,0 +1,8 @@
+<Project>
+
+  <PropertyGroup>
+    <GameDir>E:\SteamLibrary\steamapps\common\Slots and Daggers</GameDir>
+    <GameExe>Slots and Daggers.exe</GameExe>
+  </PropertyGroup>
+
+</Project>
