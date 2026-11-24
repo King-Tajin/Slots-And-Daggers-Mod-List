@@ -1,10 +1,10 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using TMPro;
-using UnityEngine;
 using UnityEngine.UI;
 
 namespace ModList
@@ -25,7 +25,7 @@ namespace ModList
 
         internal static void Populate(PluginInfo info)
         {
-            ModListScreen.AddText(false, "<alpha=#99>Changes are written to the .cfg file right away. Some mods only read their settings at startup, so restart the game for those.<alpha=#FF>");
+            UiFactory.AddText(false, "<alpha=#99>Changes are written to the .cfg file right away. Some mods only read their settings at startup, so restart the game for those.<alpha=#FF>");
 
             List<string> sections = new List<string>();
             Dictionary<string, List<ConfigEntryBase>> bySection = new Dictionary<string, List<ConfigEntryBase>>();
@@ -44,9 +44,9 @@ namespace ModList
 
             foreach (string section in sections)
             {
-                ModListScreen.AddText(false, "<b><size=120%>" + ModListScreen.Plain(section) + "</size></b>");
+                UiFactory.AddText(false, "<b><size=120%>" + UiFactory.Plain(section) + "</size></b>");
 
-                foreach (ConfigEntryBase entry in bySection[section])
+                foreach (ConfigEntryBase entry in bySection[section].OrderByDescending(OrderOf))
                 {
                     AddEntry(entry);
                 }
@@ -75,12 +75,12 @@ namespace ModList
             return entries;
         }
 
-        private static bool IsBrowsable(ConfigEntryBase entry)
+        private static object ReadTag(ConfigEntryBase entry, string fieldName)
         {
             object[] tags = entry.Description != null ? entry.Description.Tags : null;
             if (tags == null)
             {
-                return true;
+                return null;
             }
 
             foreach (object tag in tags)
@@ -90,28 +90,64 @@ namespace ModList
                     continue;
                 }
 
-                FieldInfo field = tag.GetType().GetField("Browsable");
-                if (field != null && field.GetValue(tag) is bool browsable && !browsable)
+                FieldInfo field = tag.GetType().GetField(fieldName);
+                if (field == null)
                 {
-                    return false;
+                    continue;
+                }
+
+                object value = field.GetValue(tag);
+                if (value != null)
+                {
+                    return value;
                 }
             }
 
-            return true;
+            return null;
+        }
+
+        private static bool IsBrowsable(ConfigEntryBase entry)
+        {
+            return !(ReadTag(entry, "Browsable") is bool browsable) || browsable;
+        }
+
+        private static bool IsReadOnly(ConfigEntryBase entry)
+        {
+            return ReadTag(entry, "ReadOnly") is bool readOnly && readOnly;
+        }
+
+        private static int OrderOf(ConfigEntryBase entry)
+        {
+            return ReadTag(entry, "Order") is int order ? order : 0;
         }
 
         private static void AddEntry(ConfigEntryBase entry)
         {
-            string label = "<b>" + ModListScreen.Plain(entry.Definition.Key) + "</b>" + Details(entry);
+            string label = "<b>" + UiFactory.Plain(entry.Definition.Key) + "</b>" + Details(entry);
             EntryControl control = CreateControl(entry);
 
-            Button reset = ModListScreen.CreateSmallButton("Reset", () =>
+            if (IsReadOnly(entry))
+            {
+                control.Selectable.interactable = false;
+                UiFactory.AddEntryRow(label, control.Root);
+                return;
+            }
+
+            Button reset = UiFactory.CreateSmallButton("Reset", () =>
             {
                 Apply(entry, entry.DefaultValue);
                 control.Refresh();
             });
 
-            ModListScreen.AddEntryRow(label, control.Root, reset.gameObject);
+            UiFactory.AddEntryRow(label, control.Root, reset.gameObject);
+        }
+
+        private static void Commit(ConfigEntryBase entry)
+        {
+            if (!entry.ConfigFile.SaveOnConfigSet)
+            {
+                entry.ConfigFile.Save();
+            }
         }
 
         private static void Apply(ConfigEntryBase entry, object value)
@@ -119,7 +155,7 @@ namespace ModList
             try
             {
                 entry.BoxedValue = value;
-                entry.ConfigFile.Save();
+                Commit(entry);
             }
             catch (System.Exception e)
             {
@@ -133,13 +169,13 @@ namespace ModList
 
             if (entry.Description != null && !string.IsNullOrEmpty(entry.Description.Description))
             {
-                text = ModListScreen.Plain(entry.Description.Description);
+                text = UiFactory.Plain(entry.Description.Description);
             }
 
             string defaultValue = DefaultText(entry);
             if (defaultValue != null)
             {
-                text += (text.Length > 0 ? "  " : string.Empty) + "Default: " + ModListScreen.Plain(defaultValue);
+                text += (text.Length > 0 ? "  " : string.Empty) + "Default: " + UiFactory.Plain(defaultValue);
             }
 
             return text.Length == 0 ? string.Empty : "\n<size=70%><alpha=#99>" + text + "<alpha=#FF></size>";
@@ -159,7 +195,7 @@ namespace ModList
 
         private static EntryControl CreateControl(ConfigEntryBase entry)
         {
-            if (entry.SettingType == typeof(bool) && ModListScreen.HasToggle)
+            if (entry.SettingType == typeof(bool) && UiFactory.HasToggle)
             {
                 return CreateToggle(entry);
             }
@@ -170,11 +206,12 @@ namespace ModList
 
         private static EntryControl CreateToggle(ConfigEntryBase entry)
         {
-            Toggle toggle = ModListScreen.CreateControlToggle((bool)entry.BoxedValue, isOn => Apply(entry, isOn));
+            Toggle toggle = UiFactory.CreateControlToggle((bool)entry.BoxedValue, isOn => Apply(entry, isOn));
 
             return new EntryControl
             {
                 Root = toggle.gameObject,
+                Selectable = toggle,
                 Refresh = () => toggle.SetIsOnWithoutNotify((bool)entry.BoxedValue)
             };
         }
@@ -223,17 +260,18 @@ namespace ModList
         private static EntryControl CreateCycleButton(ConfigEntryBase entry, List<object> options)
         {
             Button button = null;
-            button = ModListScreen.CreateControlButton(entry.GetSerializedValue(), () =>
+            button = UiFactory.CreateControlButton(entry.GetSerializedValue(), () =>
             {
                 int index = IndexOf(options, entry.BoxedValue);
                 Apply(entry, options[(index + 1) % options.Count]);
-                ModListScreen.SetButtonLabel(button, entry.GetSerializedValue());
+                UiFactory.SetButtonLabel(button, entry.GetSerializedValue());
             });
 
             return new EntryControl
             {
                 Root = button.gameObject,
-                Refresh = () => ModListScreen.SetButtonLabel(button, entry.GetSerializedValue())
+                Selectable = button,
+                Refresh = () => UiFactory.SetButtonLabel(button, entry.GetSerializedValue())
             };
         }
 
@@ -253,16 +291,19 @@ namespace ModList
         private static EntryControl CreateInput(ConfigEntryBase entry)
         {
             TMP_InputField input = null;
-            input = ModListScreen.CreateInputField(entry.GetSerializedValue(), text =>
+            input = UiFactory.CreateInputField(entry.GetSerializedValue(), text =>
             {
-                try
+                if (text != entry.GetSerializedValue())
                 {
-                    entry.SetSerializedValue(text);
-                    entry.ConfigFile.Save();
-                }
-                catch (System.Exception e)
-                {
-                    log.LogWarning("Could not set " + entry.Definition.Key + " to \"" + text + "\": " + e.Message);
+                    try
+                    {
+                        entry.SetSerializedValue(text);
+                        Commit(entry);
+                    }
+                    catch (System.Exception e)
+                    {
+                        log.LogWarning("Could not set " + entry.Definition.Key + " to \"" + text + "\": " + e.Message);
+                    }
                 }
 
                 input.SetTextWithoutNotify(entry.GetSerializedValue());
@@ -271,13 +312,15 @@ namespace ModList
             return new EntryControl
             {
                 Root = input.gameObject,
+                Selectable = input,
                 Refresh = () => input.SetTextWithoutNotify(entry.GetSerializedValue())
             };
         }
 
         private sealed class EntryControl
         {
-            internal GameObject Root;
+            internal UnityEngine.GameObject Root;
+            internal Selectable Selectable;
             internal System.Action Refresh;
         }
     }

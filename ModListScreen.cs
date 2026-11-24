@@ -2,10 +2,10 @@ using System.Collections.Generic;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Bootstrap;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
@@ -17,14 +17,16 @@ namespace ModList
         private const string ScreenTitle = "Mod List";
         private const string HeadingText = "Installed Mods";
         private const float RowSpacing = 18f;
-        private const float EntrySpacing = 24f;
-        private const float ControlWidth = 360f;
-        private const float SmallButtonWidth = 180f;
-        private const float ControlHeight = 64f;
         private const float WidthFraction = 0.85f;
         private const float ScrollbarMargin = 30f;
         private const int ContentPadding = 40;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
+
+#if DEBUG
+        private const string DumpHint = " Enable the development option DumpCreditsHierarchy in the config for details.";
+#else
+        private const string DumpHint = "";
+#endif
 
         private static readonly FieldInfo RootTransformField = typeof(UIScreenUGUI).GetField("rootTransform", Flags);
         private static readonly FieldInfo CurrentScreenField = typeof(UIManager).GetField("currentScreen", Flags);
@@ -34,23 +36,16 @@ namespace ModList
         private static readonly MethodInfo ShowMethod = typeof(UIManager).GetMethod("Show", Flags, null, new[] { typeof(UIScreenUGUI), typeof(bool) }, null);
 
         private static ManualLogSource log;
-        private static bool dumpHierarchy;
+        private static ConfigEntry<bool> dumpHierarchy;
         private static bool buildFailed;
         private static bool inConfig;
+        private static float appliedCanvasWidth;
         private static CreditsScreenUGUI screen;
+        private static RectTransform panelRoot;
         private static RectTransform content;
         private static ScrollRect scroll;
-        private static GameObject headingTemplate;
-        private static GameObject bodyTemplate;
-        private static GameObject buttonTemplate;
-        private static GameObject toggleTemplate;
 
-        internal static bool HasToggle
-        {
-            get { return toggleTemplate != null; }
-        }
-
-        internal static void Initialize(ManualLogSource logger, bool dump)
+        internal static void Initialize(ManualLogSource logger, ConfigEntry<bool> dump)
         {
             log = logger;
             dumpHierarchy = dump;
@@ -76,6 +71,7 @@ namespace ModList
             }
 
             Register();
+            Widen(panelRoot, scroll);
             ShowList(false);
             ShowMethod.Invoke(Main.UIManager, new object[] { screen, true });
         }
@@ -97,12 +93,25 @@ namespace ModList
             return true;
         }
 
+        [System.Diagnostics.Conditional("DEBUG")]
+        private static void DumpIfEnabled(Transform root)
+        {
+#if DEBUG
+            if (dumpHierarchy != null && dumpHierarchy.Value)
+            {
+                HierarchyDumper.Dump(log, root);
+            }
+#endif
+        }
+
         private static bool Build()
         {
             if (buildFailed)
             {
                 return false;
             }
+
+            appliedCanvasWidth = 0f;
 
             CreditsScreenUGUI source = FindSource();
             if (source == null)
@@ -146,43 +155,37 @@ namespace ModList
                     return Fail("The credits screen layout is not supported.");
                 }
 
-                if (dumpHierarchy)
-                {
-                    HierarchyDumper.Dump(log, cloneRoot);
-                }
+                DumpIfEnabled(cloneRoot);
 
                 ScrollRect cloneScroll = cloneRoot.GetComponentInChildren<ScrollRect>(true);
                 if (cloneScroll == null || cloneScroll.content == null)
                 {
-                    return Fail("The credits panel has no scroll view to reuse. Enable the development option DumpCreditsHierarchy in the config for details.");
+                    return Fail("The credits panel has no scroll view to reuse." + DumpHint);
                 }
 
                 Button backButton = BackButtonField != null ? BackButtonField.GetValue(cloneScreen) as Button : null;
                 if (backButton == null)
                 {
-                    return Fail("The credits screen has no Back button to copy the style from. Enable the development option DumpCreditsHierarchy in the config for details.");
+                    return Fail("The credits screen has no Back button to copy the style from." + DumpHint);
                 }
 
                 TMP_Text[] texts = cloneScroll.content.GetComponentsInChildren<TMP_Text>(true);
                 if (texts.Length == 0)
                 {
-                    return Fail("The credits scroll view has no text to copy the style from. Enable the development option DumpCreditsHierarchy in the config for details.");
+                    return Fail("The credits scroll view has no text to copy the style from." + DumpHint);
                 }
 
                 System.Array.Sort(texts, (a, b) => a.fontSize.CompareTo(b.fontSize));
-                headingTemplate = CreateTemplate(texts[texts.Length - 1].gameObject, screenClone.transform);
-                bodyTemplate = CreateTemplate(texts[texts.Length / 2].gameObject, screenClone.transform);
-                buttonTemplate = CreateTemplate(backButton.gameObject, screenClone.transform);
+                GameObject headingTemplate = CreateTemplate(texts[texts.Length - 1].gameObject, screenClone.transform);
+                GameObject bodyTemplate = CreateTemplate(texts[texts.Length / 2].gameObject, screenClone.transform);
+                GameObject buttonTemplate = CreateTemplate(backButton.gameObject, screenClone.transform);
+                GameObject toggleTemplate = null;
 
                 Toggle settingsToggle = FindSettingsToggle();
                 if (settingsToggle != null)
                 {
                     toggleTemplate = CreateTemplate(settingsToggle.gameObject, screenClone.transform);
-
-                    if (dumpHierarchy)
-                    {
-                        HierarchyDumper.Dump(log, toggleTemplate.transform);
-                    }
+                    DumpIfEnabled(toggleTemplate.transform);
                 }
                 else
                 {
@@ -222,7 +225,10 @@ namespace ModList
                     rootGroup.blocksRaycasts = false;
                 }
 
+                UiFactory.Bind(listContent, headingTemplate, bodyTemplate, buttonTemplate, toggleTemplate);
+
                 screen = cloneScreen;
+                panelRoot = cloneRoot;
                 scroll = cloneScroll;
                 content = listContent;
                 log.LogDebug("Built the mod list screen");
@@ -402,11 +408,19 @@ namespace ModList
                 return;
             }
 
-            float width = canvasRect.rect.width * WidthFraction;
+            float canvasWidth = canvasRect.rect.width;
+            if (Mathf.Approximately(canvasWidth, appliedCanvasWidth))
+            {
+                return;
+            }
+
+            float width = canvasWidth * WidthFraction;
             if (width <= 0f)
             {
                 return;
             }
+
+            appliedCanvasWidth = canvasWidth;
 
             RectTransform view = (RectTransform)scrollRect.transform;
             RectTransform wrapper = view.parent as RectTransform;
@@ -425,7 +439,12 @@ namespace ModList
             {
                 barRect.pivot = new Vector2(1f, barRect.pivot.y);
 
-                ScrollbarPinner pinner = barRect.gameObject.AddComponent<ScrollbarPinner>();
+                ScrollbarPinner pinner = barRect.GetComponent<ScrollbarPinner>();
+                if (pinner == null)
+                {
+                    pinner = barRect.gameObject.AddComponent<ScrollbarPinner>();
+                }
+
                 pinner.CanvasRect = canvasRect;
                 pinner.Margin = ScrollbarMargin;
             }
@@ -518,7 +537,14 @@ namespace ModList
         private static void Register()
         {
             List<UIScreenUGUI> screens = AllScreensField.GetValue(Main.UIManager) as List<UIScreenUGUI>;
-            if (screens != null && !screens.Contains(screen))
+            if (screens == null)
+            {
+                return;
+            }
+
+            screens.RemoveAll(s => s == null);
+
+            if (!screens.Contains(screen))
             {
                 screens.Add(screen);
             }
@@ -532,7 +558,7 @@ namespace ModList
             List<PluginInfo> plugins = new List<PluginInfo>(Chainloader.PluginInfos.Values);
             plugins.Sort((a, b) => string.Compare(a.Metadata.Name, b.Metadata.Name, System.StringComparison.OrdinalIgnoreCase));
 
-            AddText(true, HeadingText + " (" + plugins.Count + ")");
+            UiFactory.AddText(true, HeadingText + " (" + plugins.Count + ")");
 
             foreach (PluginInfo info in plugins)
             {
@@ -541,12 +567,12 @@ namespace ModList
                 if (ConfigEditor.CountEntries(info) > 0)
                 {
                     PluginInfo selected = info;
-                    Button config = CreateSmallButton("Config", () => ShowConfig(selected, true));
-                    AddEntryRow(description, config.gameObject);
+                    Button config = UiFactory.CreateSmallButton("Config", () => ShowConfig(selected, true));
+                    UiFactory.AddEntryRow(description, config.gameObject);
                 }
                 else
                 {
-                    AddEntryRow(description);
+                    UiFactory.AddEntryRow(description);
                 }
             }
 
@@ -558,7 +584,7 @@ namespace ModList
             inConfig = true;
             DiscardChildren(content);
 
-            AddText(true, Plain(info.Metadata.Name) + " Settings");
+            UiFactory.AddText(true, UiFactory.Plain(info.Metadata.Name) + " Settings");
             ConfigEditor.Populate(info);
 
             FinishView(focus);
@@ -566,6 +592,7 @@ namespace ModList
 
         private static void FinishView(bool focus)
         {
+            scroll.StopMovement();
             scroll.verticalNormalizedPosition = 1f;
 
             if (!focus || EventSystem.current == null)
@@ -590,190 +617,20 @@ namespace ModList
             }
         }
 
-        private static TMP_Text CreateText(Transform parent, GameObject template, string text)
-        {
-            GameObject instance = Object.Instantiate(template, parent);
-            instance.name = "ModListRow";
-            instance.SetActive(true);
-
-            TMP_Text label = instance.GetComponent<TMP_Text>();
-            label.richText = true;
-            label.raycastTarget = false;
-            label.text = text;
-            return label;
-        }
-
-        internal static TMP_Text AddText(bool heading, string text)
-        {
-            return CreateText(content, heading ? headingTemplate : bodyTemplate, text);
-        }
-
-        internal static Button CreateControlButton(string label, UnityAction onClick)
-        {
-            return CreateSizedButton(label, onClick, ControlWidth);
-        }
-
-        internal static Button CreateSmallButton(string label, UnityAction onClick)
-        {
-            return CreateSizedButton(label, onClick, SmallButtonWidth);
-        }
-
-        private static Button CreateSizedButton(string label, UnityAction onClick, float width)
-        {
-            Button button = CreateButton(label, onClick);
-            LayoutElement element = button.gameObject.AddComponent<LayoutElement>();
-            element.minWidth = width;
-            element.preferredWidth = width;
-            element.flexibleWidth = 0f;
-            element.minHeight = ControlHeight;
-            element.preferredHeight = ControlHeight;
-            return button;
-        }
-
-        internal static Toggle CreateControlToggle(bool value, UnityAction<bool> onChanged)
-        {
-            GameObject instance = Object.Instantiate(toggleTemplate, content);
-            instance.name = "ModListToggle";
-
-            foreach (TMP_Text label in instance.GetComponentsInChildren<TMP_Text>(true))
-            {
-                if (label.gameObject != instance)
-                {
-                    label.gameObject.SetActive(false);
-                }
-            }
-
-            LayoutElement element = instance.AddComponent<LayoutElement>();
-            element.minWidth = SmallButtonWidth;
-            element.preferredWidth = SmallButtonWidth;
-            element.flexibleWidth = 0f;
-            element.minHeight = ControlHeight;
-            element.preferredHeight = ControlHeight;
-
-            Toggle toggle = instance.GetComponent<Toggle>();
-            toggle.onValueChanged = new Toggle.ToggleEvent();
-            toggle.SetIsOnWithoutNotify(value);
-            toggle.onValueChanged.AddListener(onChanged);
-            return toggle;
-        }
-
-        internal static void SetButtonLabel(Button button, string text)
-        {
-            foreach (TMP_Text label in button.GetComponentsInChildren<TMP_Text>(true))
-            {
-                label.richText = true;
-                label.text = text;
-            }
-        }
-
-        private static Button CreateButton(string label, UnityAction onClick)
-        {
-            GameObject instance = Object.Instantiate(buttonTemplate, content);
-            instance.name = "ModListButton";
-            instance.SetActive(true);
-
-            Button button = instance.GetComponent<Button>();
-            button.onClick = new Button.ButtonClickedEvent();
-            button.onClick.AddListener(onClick);
-            SetButtonLabel(button, label);
-            return button;
-        }
-
-        internal static TMP_InputField CreateInputField(string value, UnityAction<string> onEndEdit)
-        {
-            TMP_Text style = bodyTemplate.GetComponent<TMP_Text>();
-
-            GameObject root = new GameObject("ModListInput", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
-            root.SetActive(false);
-            root.transform.SetParent(content, false);
-
-            Image background = root.GetComponent<Image>();
-            background.color = new Color(0f, 0f, 0f, 0.45f);
-
-            LayoutElement element = root.GetComponent<LayoutElement>();
-            element.minWidth = ControlWidth;
-            element.preferredWidth = ControlWidth;
-            element.flexibleWidth = 0f;
-            element.minHeight = ControlHeight;
-            element.preferredHeight = ControlHeight;
-
-            GameObject areaObject = new GameObject("TextArea", typeof(RectTransform), typeof(RectMask2D));
-            RectTransform area = (RectTransform)areaObject.transform;
-            area.SetParent(root.transform, false);
-            area.anchorMin = Vector2.zero;
-            area.anchorMax = Vector2.one;
-            area.offsetMin = new Vector2(12f, 6f);
-            area.offsetMax = new Vector2(-12f, -6f);
-
-            GameObject textObject = new GameObject("Text", typeof(RectTransform), typeof(TextMeshProUGUI));
-            RectTransform textRect = (RectTransform)textObject.transform;
-            textRect.SetParent(area, false);
-            textRect.anchorMin = Vector2.zero;
-            textRect.anchorMax = Vector2.one;
-            textRect.offsetMin = Vector2.zero;
-            textRect.offsetMax = Vector2.zero;
-
-            TextMeshProUGUI text = textObject.GetComponent<TextMeshProUGUI>();
-            text.font = style.font;
-            text.fontSharedMaterial = style.fontSharedMaterial;
-            text.fontSize = style.fontSize;
-            text.color = style.color;
-            text.enableAutoSizing = false;
-            text.alignment = TextAlignmentOptions.Left;
-
-            TMP_InputField input = root.AddComponent<TMP_InputField>();
-            input.textViewport = area;
-            input.textComponent = text;
-            input.targetGraphic = background;
-            input.lineType = TMP_InputField.LineType.SingleLine;
-            input.richText = false;
-            input.SetTextWithoutNotify(value);
-            input.onEndEdit.AddListener(onEndEdit);
-            return input;
-        }
-
-        internal static void AddEntryRow(string labelText, params GameObject[] controls)
-        {
-            GameObject row = new GameObject("ModListEntry", typeof(RectTransform), typeof(HorizontalLayoutGroup));
-            row.transform.SetParent(content, false);
-
-            HorizontalLayoutGroup layout = row.GetComponent<HorizontalLayoutGroup>();
-            layout.spacing = EntrySpacing;
-            layout.childControlWidth = true;
-            layout.childControlHeight = true;
-            layout.childForceExpandWidth = false;
-            layout.childForceExpandHeight = false;
-
-            TMP_Text label = CreateText(row.transform, bodyTemplate, labelText);
-            label.alignment = TextAlignmentOptions.TopLeft;
-
-            LayoutElement labelElement = label.gameObject.AddComponent<LayoutElement>();
-            labelElement.flexibleWidth = 1f;
-            labelElement.minWidth = 120f;
-
-            foreach (GameObject control in controls)
-            {
-                control.transform.SetParent(row.transform, false);
-                control.SetActive(true);
-            }
-        }
-
         private static string Describe(PluginInfo info)
         {
-            bool active = info.Instance != null && info.Instance.enabled;
+            string line = "<b>" + UiFactory.Plain(info.Metadata.Name) + "</b>  <alpha=#99>v" + info.Metadata.Version + "<alpha=#FF>";
 
-            string line = "<b>" + Plain(info.Metadata.Name) + "</b>  <alpha=#99>v" + info.Metadata.Version + "<alpha=#FF>";
-            if (!active)
+            if (info.Instance == null)
+            {
+                line += "  <color=#FF6B6B>Not loaded</color>";
+            }
+            else if (!info.Instance.enabled)
             {
                 line += "  <color=#FF6B6B>Disabled</color>";
             }
 
-            return line + "\n<size=70%><alpha=#99>" + Plain(info.Metadata.GUID) + "<alpha=#FF></size>";
-        }
-
-        internal static string Plain(string value)
-        {
-            return "<noparse>" + value.Replace("</noparse>", string.Empty) + "</noparse>";
+            return line + "\n<size=70%><alpha=#99>" + UiFactory.Plain(info.Metadata.GUID) + "<alpha=#FF></size>";
         }
     }
 }

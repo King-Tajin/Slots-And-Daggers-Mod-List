@@ -6,4 +6,5 @@ obj/
 *.suo
 
 libs/
-dist/
+
+Directory.Build.props

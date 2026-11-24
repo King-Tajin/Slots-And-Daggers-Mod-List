@@ -4,9 +4,10 @@ A BepInEx 5 plugin for Slots & Daggers that adds a Mods button and in-game confi
 
 ## Features
 
-- A Mod List screen showing every installed BepInEx mod with its name, version, and package name
+- A Mod List screen showing every installed BepInEx mod with its name, version, and GUID
 - A Config button for mods that have settings, so you can change them without leaving the game
 - A Reset button on every setting
+- Settings marked `ReadOnly` or `Browsable = false` by their mod are shown read-only or hidden, and `Order` is respected
 - Changes are saved to the mod's `.cfg` file right away
 
 ## Install
@@ -17,5 +18,5 @@ A BepInEx 5 plugin for Slots & Daggers that adds a Mods button and in-game confi
 
 ## Build
 
-1. Create a `libs/` folder next to the `.csproj` and copy in the BepInEx, Harmony, Unity, `UnityEngine.UI`, `Unity.TextMeshPro`, and `Assembly-CSharp` DLLs from your game install.
+1. Create a `libs/` folder next to the `.csproj` and copy in the Unity, `UnityEngine.UI`, `Unity.TextMeshPro`, and `Assembly-CSharp` DLLs from your game install. BepInEx and Harmony come from the `BepInEx.Core` NuGet package.
 2. Run `dotnet build -c Release`.

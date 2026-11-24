@@ -1,3 +1,4 @@
+#if DEBUG
 using System.Collections.Generic;
 using System.Text;
 using BepInEx.Logging;
@@ -75,3 +76,4 @@ namespace ModList
         }
     }
 }
+#endif

@@ -2,58 +2,49 @@ using System;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
-using UnityEngine;
 
 namespace ModList
 {
-    [BepInPlugin("com.king_tajin.modlist", "Mod List", "0.5.0")]
+    [BepInPlugin("com.king_tajin.modlist", "Mod List", "0.5.1")]
+    [BepInProcess("Slots and Daggers.exe")]
     public class Plugin : BaseUnityPlugin
     {
-        private const float ScanIntervalSeconds = 1f;
-
-        private ConfigEntry<bool> dumpCreditsHierarchy;
-        private float nextScan;
-        private bool errorLogged;
-
         private void Awake()
         {
+            ConfigEntry<bool> dumpCreditsHierarchy = null;
+
+#if DEBUG
             dumpCreditsHierarchy = Config.Bind("Debug", "DumpCreditsHierarchy", false, "For development purposes only. Logs the credits screen hierarchy the first time the mod list opens, to help adjust the layout after a game update");
+#endif
 
             ModsButtonInjector.Initialize(Logger);
-            ModListScreen.Initialize(Logger, dumpCreditsHierarchy.Value);
+            ModListScreen.Initialize(Logger, dumpCreditsHierarchy);
 
-            try
+            Harmony harmony = new Harmony("com.king_tajin.modlist");
+            foreach (Type patch in new[] { typeof(CloseCurrentUIScreenPatch), typeof(StartMenuButtonPatch), typeof(PauseMenuButtonPatch) })
             {
-                new Harmony("com.king_tajin.modlist").PatchAll(typeof(CloseCurrentUIScreenPatch));
-            }
-            catch (Exception e)
-            {
-                Logger.LogError(e);
+                try
+                {
+                    harmony.PatchAll(patch);
+                }
+                catch (Exception e)
+                {
+                    Logger.LogError(e);
+                }
             }
 
             Logger.LogInfo("Mod List loaded");
         }
 
-        private void Update()
+        private void Start()
         {
-            if (Time.unscaledTime < nextScan)
-            {
-                return;
-            }
-
-            nextScan = Time.unscaledTime + ScanIntervalSeconds;
-
             try
             {
-                ModsButtonInjector.Scan();
+                ModsButtonInjector.ScanExisting();
             }
             catch (Exception e)
             {
-                if (!errorLogged)
-                {
-                    errorLogged = true;
-                    Logger.LogError(e);
-                }
+                Logger.LogError(e);
             }
         }
     }

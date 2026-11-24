@@ -13,8 +13,10 @@ namespace ModList
         private const float FallbackSpacing = 10f;
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
 
-        private static readonly FieldInfo StartMenuProgressField = typeof(StartMenuUGUI).GetField("m_ProgressButton", Flags);
-        private static readonly FieldInfo PauseMenuProgressField = typeof(PauseScreenUGui).GetField("m_ProgressButton", Flags);
+        internal static readonly FieldInfo StartMenuProgressField = typeof(StartMenuUGUI).GetField("m_ProgressButton", Flags);
+        internal static readonly FieldInfo PauseMenuProgressField = typeof(PauseScreenUGui).GetField("m_ProgressButton", Flags);
+
+        private static readonly FieldInfo UseToolTipField = typeof(UIMenuButton).GetField("useToolTip", Flags);
 
         private static ManualLogSource log;
 
@@ -31,9 +33,14 @@ namespace ModList
             {
                 log.LogWarning("PauseScreenUGui.m_ProgressButton was not found, the Pause menu button will be skipped.");
             }
+
+            if (UseToolTipField == null)
+            {
+                log.LogWarning("UIMenuButton.useToolTip was not found, the Mods button may show the Progress tooltip.");
+            }
         }
 
-        internal static void Scan()
+        internal static void ScanExisting()
         {
             foreach (StartMenuUGUI screen in Object.FindObjectsByType<StartMenuUGUI>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
@@ -46,7 +53,19 @@ namespace ModList
             }
         }
 
-        private static void Inject(FieldInfo progressField, MonoBehaviour screen)
+        internal static void Inject(FieldInfo progressField, MonoBehaviour screen)
+        {
+            try
+            {
+                InjectInternal(progressField, screen);
+            }
+            catch (System.Exception e)
+            {
+                log.LogError(e);
+            }
+        }
+
+        private static void InjectInternal(FieldInfo progressField, MonoBehaviour screen)
         {
             if (progressField == null)
             {
@@ -74,6 +93,19 @@ namespace ModList
                 if (behaviour != null && behaviour.GetType().Name == "LocalizeStringEvent")
                 {
                     Object.DestroyImmediate(behaviour);
+                }
+            }
+
+            foreach (Tooltip tooltip in clone.GetComponentsInChildren<Tooltip>(true))
+            {
+                Object.DestroyImmediate(tooltip);
+            }
+
+            if (UseToolTipField != null)
+            {
+                foreach (UIMenuButton menuButton in clone.GetComponentsInChildren<UIMenuButton>(true))
+                {
+                    UseToolTipField.SetValue(menuButton, false);
                 }
             }
 
