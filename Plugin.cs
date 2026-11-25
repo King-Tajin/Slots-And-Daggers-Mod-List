@@ -5,7 +5,7 @@ using HarmonyLib;
 
 namespace ModList
 {
-    [BepInPlugin("com.king_tajin.modlist", "Mod List", "0.5.1")]
+    [BepInPlugin("com.king_tajin.modlist", "Mod List", "0.5.2")]
     [BepInProcess("Slots and Daggers.exe")]
     public class Plugin : BaseUnityPlugin
     {

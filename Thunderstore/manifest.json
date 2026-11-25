@@ -1,6 +1,6 @@
 {
   "name": "ModList",
-  "version_number": "0.5.1",
+  "version_number": "0.5.2",
   "website_url": "https://github.com/King-Tajin/Slots-And-Daggers-Mod-List",
   "description": "Adds a Mods button and in-game config editor to Slots & Daggers. See every installed mod and change its settings without leaving the game.",
   "dependencies": [

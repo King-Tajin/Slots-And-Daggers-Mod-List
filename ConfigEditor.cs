@@ -178,6 +178,12 @@ namespace ModList
                 text += (text.Length > 0 ? "  " : string.Empty) + "Default: " + UiFactory.Plain(defaultValue);
             }
 
+            string rangeValue = RangeText(entry);
+            if (rangeValue != null)
+            {
+                text += (text.Length > 0 ? "  " : string.Empty) + "Range: " + UiFactory.Plain(rangeValue);
+            }
+
             return text.Length == 0 ? string.Empty : "\n<size=70%><alpha=#99>" + text + "<alpha=#FF></size>";
         }
 
@@ -186,6 +192,24 @@ namespace ModList
             try
             {
                 return TomlTypeConverter.ConvertToString(entry.DefaultValue, entry.SettingType);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string RangeText(ConfigEntryBase entry)
+        {
+            try
+            {
+                NumericRange range = GetRange(entry);
+                if (range == null)
+                {
+                    return null;
+                }
+
+                return TomlTypeConverter.ConvertToString(range.Min, range.Type) + " to " + TomlTypeConverter.ConvertToString(range.Max, range.Type);
             }
             catch
             {
@@ -290,9 +314,15 @@ namespace ModList
 
         private static EntryControl CreateInput(ConfigEntryBase entry)
         {
+            NumericRange range = GetRange(entry);
             TMP_InputField input = null;
             input = UiFactory.CreateInputField(entry.GetSerializedValue(), text =>
             {
+                if (range != null)
+                {
+                    text = ClampText(text, range);
+                }
+
                 if (text != entry.GetSerializedValue())
                 {
                     try
@@ -309,12 +339,166 @@ namespace ModList
                 input.SetTextWithoutNotify(entry.GetSerializedValue());
             });
 
+            if (range != null)
+            {
+                input.onValidateInput = (text, index, added) => ValidateChar(input, range, text, index, added);
+            }
+
             return new EntryControl
             {
                 Root = input.gameObject,
                 Selectable = input,
                 Refresh = () => input.SetTextWithoutNotify(entry.GetSerializedValue())
             };
+        }
+
+        private static bool IsNumeric(System.Type type)
+        {
+            return type == typeof(sbyte) || type == typeof(byte) || type == typeof(short) || type == typeof(ushort)
+                || type == typeof(int) || type == typeof(uint) || type == typeof(long) || type == typeof(ulong)
+                || type == typeof(float) || type == typeof(double) || type == typeof(decimal);
+        }
+
+        private static NumericRange GetRange(ConfigEntryBase entry)
+        {
+            if (!IsNumeric(entry.SettingType))
+            {
+                return null;
+            }
+
+            AcceptableValueBase acceptable = entry.Description != null ? entry.Description.AcceptableValues : null;
+            if (acceptable == null || !acceptable.GetType().Name.StartsWith("AcceptableValueRange"))
+            {
+                return null;
+            }
+
+            PropertyInfo minProperty = acceptable.GetType().GetProperty("MinValue");
+            PropertyInfo maxProperty = acceptable.GetType().GetProperty("MaxValue");
+            if (minProperty == null || maxProperty == null)
+            {
+                return null;
+            }
+
+            System.IComparable min = minProperty.GetValue(acceptable, null) as System.IComparable;
+            System.IComparable max = maxProperty.GetValue(acceptable, null) as System.IComparable;
+            if (min == null || max == null)
+            {
+                return null;
+            }
+
+            System.Type type = entry.SettingType;
+            object zero = TomlTypeConverter.ConvertToValue("0", type);
+
+            return new NumericRange
+            {
+                Type = type,
+                Min = min,
+                Max = max,
+                Floating = type == typeof(float) || type == typeof(double) || type == typeof(decimal),
+                AllowNegative = min.CompareTo(zero) < 0
+            };
+        }
+
+        private static char ValidateChar(TMP_InputField input, NumericRange range, string text, int index, char added)
+        {
+            int start = System.Math.Min(input.selectionStringAnchorPosition, input.selectionStringFocusPosition);
+            int end = System.Math.Max(input.selectionStringAnchorPosition, input.selectionStringFocusPosition);
+
+            if (start < 0 || end > text.Length)
+            {
+                start = System.Math.Max(0, System.Math.Min(index, text.Length));
+                end = start;
+            }
+
+            string candidate = text.Remove(start, end - start).Insert(start, added.ToString());
+            return IsAllowedPrefix(candidate, range) ? added : '\0';
+        }
+
+        private static bool IsAllowedPrefix(string candidate, NumericRange range)
+        {
+            int position = 0;
+            if (candidate.Length > 0 && candidate[0] == '-')
+            {
+                if (!range.AllowNegative)
+                {
+                    return false;
+                }
+
+                position = 1;
+            }
+
+            bool hasDigit = false;
+            bool hasPoint = false;
+            for (; position < candidate.Length; position++)
+            {
+                char c = candidate[position];
+                if (c >= '0' && c <= '9')
+                {
+                    hasDigit = true;
+                }
+                else if (c == '.' && range.Floating && !hasPoint)
+                {
+                    hasPoint = true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            if (!hasDigit)
+            {
+                return true;
+            }
+
+            object value;
+            try
+            {
+                value = TomlTypeConverter.ConvertToValue(candidate, range.Type);
+            }
+            catch
+            {
+                return false;
+            }
+
+            return range.Max.CompareTo(value) >= 0;
+        }
+
+        private static string ClampText(string text, NumericRange range)
+        {
+            object value;
+            try
+            {
+                value = TomlTypeConverter.ConvertToValue(text, range.Type);
+            }
+            catch
+            {
+                return text;
+            }
+
+            if (range.Min.CompareTo(value) > 0)
+            {
+                value = range.Min;
+            }
+            else if (range.Max.CompareTo(value) < 0)
+            {
+                value = range.Max;
+            }
+            else
+            {
+                return text;
+            }
+
+            return TomlTypeConverter.ConvertToString(value, range.Type);
+        }
+
+        private sealed class NumericRange
+        {
+            internal System.Type Type;
+            internal System.IComparable Min;
+            internal System.IComparable Max;
+            internal bool Floating;
+            internal bool AllowNegative;
         }
 
         private sealed class EntryControl
